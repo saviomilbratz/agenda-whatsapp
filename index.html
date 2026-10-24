@@ -49,6 +49,16 @@
   textarea{min-height:110px;resize:vertical}
   select{font:inherit;color:var(--fg);background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px}
   .resumo{color:var(--mut);font-size:14px;margin:14px 4px 0}
+  .abas{display:flex;gap:6px;margin-bottom:10px}
+  .abas .chip{flex:1;text-align:center}
+  .grav{display:flex;flex-direction:column;align-items:center;gap:10px;padding:6px 0}
+  .rec{width:74px;height:74px;border-radius:50%;border:0;background:#e53935;color:#fff;font-size:30px;box-shadow:0 2px 10px rgba(0,0,0,.2)}
+  .rec.on{animation:pulso 1.2s infinite;border-radius:18px}
+  @keyframes pulso{50%{transform:scale(.92);opacity:.8}}
+  .tempo{font-variant-numeric:tabular-nums;font-size:20px}
+  .grav small{color:var(--mut);text-align:center}
+  .grav audio{width:100%}
+  .linkbtn{border:0;background:none;color:var(--acc);font-size:15px;padding:4px}
   #fallback{position:fixed;left:14px;right:14px;bottom:14px;border:0;border-radius:12px;padding:15px;font-size:17px;font-weight:600;background:var(--acc);color:var(--accfg)}
 </style>
 </head>
@@ -93,7 +103,17 @@
   </div>
 
   <h2>✍️ Mensagem</h2>
-  <div class="card"><textarea id="msg" placeholder="Digite a mensagem… (ou deixe vazio se for mandar um áudio no chat)"></textarea></div>
+  <div class="card">
+    <div class="abas"><button class="chip sel" id="abaTxt">✍️ Texto</button><button class="chip" id="abaAud">🎙️ Áudio</button></div>
+    <div id="painelTxt"><textarea id="msg" placeholder="Digite a mensagem…"></textarea></div>
+    <div id="painelAud" class="grav" style="display:none">
+      <button class="rec" id="rec">🎙️</button>
+      <div class="tempo" id="tempo">0:00</div>
+      <small id="dica">Toque para gravar · toque de novo para parar</small>
+      <audio id="ouvir" controls style="display:none"></audio>
+      <button class="linkbtn" id="descartar" style="display:none">🗑️ Apagar e gravar de novo</button>
+    </div>
+  </div>
 
   <div class="resumo" id="resumo"></div>
   <button id="fallback">✅ Agendar</button>
@@ -153,6 +173,37 @@ document.querySelectorAll('#avisos .chip').forEach(b => b.onclick = () => {
   st.aviso = b.dataset.h === 'x' ? 'x' : +b.dataset.h; vib(); atualiza(); });
 ['qtd','un','msg'].forEach(id => document.getElementById(id).addEventListener('input', atualiza));
 
+// ---- áudio
+let modo = P.get('a') ? 'aud' : 'txt', audioBlob = null, rec = null, pedacos = [], t0 = 0, relogio = null;
+function aba(m){ modo = m; document.getElementById('abaTxt').classList.toggle('sel', m === 'txt'); document.getElementById('abaAud').classList.toggle('sel', m === 'aud');
+  document.getElementById('painelTxt').style.display = m === 'txt' ? '' : 'none'; document.getElementById('painelAud').style.display = m === 'aud' ? '' : 'none'; atualiza(); }
+document.getElementById('abaTxt').onclick = () => aba('txt');
+document.getElementById('abaAud').onclick = () => aba('aud');
+const fmt = s => Math.floor(s/60) + ':' + String(Math.floor(s%60)).padStart(2,'0');
+document.getElementById('rec').onclick = async () => {
+  const b = document.getElementById('rec');
+  if (rec && rec.state === 'recording') { rec.stop(); return; }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({audio: true});
+    const tipo = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg'].find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
+    rec = new MediaRecorder(stream, tipo ? {mimeType: tipo} : {}); pedacos = [];
+    rec.ondataavailable = e => e.data.size && pedacos.push(e.data);
+    rec.onstop = () => { stream.getTracks().forEach(x => x.stop()); clearInterval(relogio); b.classList.remove('on'); b.textContent = '🎙️';
+      audioBlob = new Blob(pedacos, {type: rec.mimeType || tipo || 'audio/webm'});
+      const o = document.getElementById('ouvir'); o.src = URL.createObjectURL(audioBlob); o.style.display = '';
+      document.getElementById('descartar').style.display = ''; document.getElementById('dica').textContent = 'Ouça antes de agendar'; b.style.display = 'none'; atualiza(); };
+    rec.start(250); t0 = Date.now(); b.classList.add('on'); b.textContent = '⏹';
+    document.getElementById('dica').textContent = 'Gravando… toque para parar';
+    relogio = setInterval(() => document.getElementById('tempo').textContent = fmt((Date.now() - t0)/1000), 250);
+    vib();
+  } catch (e) {
+    (tg && tg.showAlert ? tg.showAlert.bind(tg) : alert)('Não consegui usar o microfone aqui (' + e.name + '). Grave o áudio no chat do bot.');
+  }
+};
+document.getElementById('descartar').onclick = () => { audioBlob = null; const o = document.getElementById('ouvir'); o.removeAttribute('src'); o.style.display = 'none';
+  document.getElementById('descartar').style.display = 'none'; document.getElementById('rec').style.display = ''; document.getElementById('tempo').textContent = '0:00';
+  document.getElementById('dica').textContent = 'Toque para gravar · toque de novo para parar'; atualiza(); };
+
 function avisoHoras(){
   if (st.aviso === 'x'){ const q = parseFloat(document.getElementById('qtd').value); return q > 0 ? Math.round(q * +document.getElementById('un').value * 100)/100 : null; }
   return st.aviso;
@@ -161,6 +212,8 @@ function falta(){
   const f = [];
   if (!st.data) f.push('data');
   if (avisoHoras() === null) f.push('aviso');
+  if (modo === 'aud' && !audioBlob && !P.get('a')) f.push('gravar o áudio');
+  if (modo === 'txt' && !document.getElementById('msg').value.trim() && !P.get('a')) f.push('mensagem');
   if (!st.agora && st.data){ const q = new Date(st.data+'T'+String(st.h).padStart(2,'0')+':'+String(st.m).padStart(2,'0')); if (q < new Date()) f.push('horário já passou'); }
   return f;
 }
@@ -177,19 +230,34 @@ function atualiza(){
 const b64u = b => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
 const deb64u = s => Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/') + '==='.slice((s.length+3)%4)), c => c.charCodeAt(0));
 let enviando = false;
+async function cifrar(bytes){
+  const chave = await crypto.subtle.importKey('raw', deb64u(P.get('k')), 'AES-GCM', false, ['encrypt']);
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const ct = await crypto.subtle.encrypt({name: 'AES-GCM', iv}, chave, bytes);
+  const out = new Uint8Array(12 + ct.byteLength); out.set(iv); out.set(new Uint8Array(ct), 12); return out;
+}
+// avisa o PC que o agendador foi aberto (o formulário não expira mais)
+if (P.get('fid') && P.get('k') && P.get('tp')) cifrar(new TextEncoder().encode(JSON.stringify({fid: P.get('fid'), evento: 'aberto'})))
+  .then(p => fetch('https://ntfy.sh/' + P.get('tp'), {method: 'POST', body: P.get('fid') + '.' + b64u(p)})).catch(() => {});
 async function enviar(){
   if (falta().length || enviando) return;
   if (!P.get('fid') || !P.get('k') || !P.get('tp')) { alert('Protótipo — abra pelo botão do bot.'); return; }
   enviando = true;
   if (tg && tg.MainButton) { tg.MainButton.setText('Enviando…'); tg.MainButton.showProgress(); }
+  const comAudio = modo === 'aud' && audioBlob;
   const dados = {fid: P.get('fid'), data: st.agora ? 'agora' : st.data, hora: st.agora ? null : String(st.h).padStart(2,'0')+':'+String(st.m).padStart(2,'0'),
-                 aviso: avisoHoras(), texto: document.getElementById('msg').value.trim() || null};
+                 aviso: avisoHoras(), texto: modo === 'txt' ? (document.getElementById('msg').value.trim() || null) : null,
+                 audio: !!comAudio, mime: comAudio ? audioBlob.type : null};
   try {
-    const chave = await crypto.subtle.importKey('raw', deb64u(P.get('k')), 'AES-GCM', false, ['encrypt']);
-    const iv = crypto.getRandomValues(new Uint8Array(12));
-    const ct = await crypto.subtle.encrypt({name: 'AES-GCM', iv}, chave, new TextEncoder().encode(JSON.stringify(dados)));
-    const pacote = new Uint8Array(12 + ct.byteLength); pacote.set(iv); pacote.set(new Uint8Array(ct), 12);
-    const r = await fetch('https://ntfy.sh/' + P.get('tp'), {method: 'POST', body: P.get('fid') + '.' + b64u(pacote)});
+    const pacote = await cifrar(new TextEncoder().encode(JSON.stringify(dados)));
+    let r;
+    if (comAudio) {
+      const arq = await cifrar(new Uint8Array(await audioBlob.arrayBuffer()));
+      r = await fetch('https://ntfy.sh/' + P.get('tp'), {method: 'PUT', body: arq,
+            headers: {'Filename': 'a.bin', 'X-Message': P.get('fid') + '.' + b64u(pacote)}});
+    } else {
+      r = await fetch('https://ntfy.sh/' + P.get('tp'), {method: 'POST', body: P.get('fid') + '.' + b64u(pacote)});
+    }
     if (!r.ok) throw new Error('HTTP ' + r.status);
     if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
     if (tg) tg.close(); else alert('Enviado!');
@@ -201,6 +269,7 @@ async function enviar(){
 }
 if (tg && tg.MainButton) tg.MainButton.onClick(enviar);
 document.getElementById('fallback').onclick = enviar;
+if (P.get('a')) { document.getElementById('abaAud').textContent = '🎙️ Áudio (' + P.get('a') + ')'; aba('aud'); document.getElementById('dica').textContent = 'Áudio já enviado pelo chat — ou grave outro'; }
 calendario(); atualiza();
 </script>
 </body>
