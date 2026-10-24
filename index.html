@@ -125,11 +125,12 @@ const nome = P.get('n') || 'Contato'; document.getElementById('nome').textConten
 document.getElementById('ini').textContent = nome.replace(/[^A-Za-zÀ-ú0-9]/g,'').slice(0,1).toUpperCase() || '?';
 document.getElementById('msg').value = P.get('t') || '';
 const _n = new Date(Date.now() + 5*60000);           // hora atual arredondada p/ os próximos 5 min
-const st = {data: null, agora: false, h: _n.getHours(), m: Math.ceil(_n.getMinutes()/5)*5 % 60, aviso: 0};
+const st = {data: null /* hoje, logo abaixo */, agora: false, h: _n.getHours(), m: Math.ceil(_n.getMinutes()/5)*5 % 60, aviso: 0};
 if (_n.getMinutes() > 55) st.h = (st.h + 1) % 24;
 const hoje = new Date(); hoje.setHours(0,0,0,0);
 let vis = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
 const iso = d => d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');
+st.data = iso(hoje);   // data pré-selecionada: hoje
 const vib = () => tg && tg.HapticFeedback && tg.HapticFeedback.selectionChanged();
 
 function calendario(){
