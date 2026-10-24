@@ -174,12 +174,30 @@ function atualiza(){
   if (tg && tg.MainButton){ tg.MainButton.setText(ok ? '✅ Agendar' : 'Falta: ' + f.join(', ')); ok ? tg.MainButton.enable() : tg.MainButton.disable(); tg.MainButton.show(); document.getElementById('fallback').style.display='none'; }
   document.getElementById('fallback').disabled = !ok; document.getElementById('fallback').style.opacity = ok ? 1 : .5;
 }
-function enviar(){
-  if (falta().length) return;
+const b64u = b => btoa(String.fromCharCode(...new Uint8Array(b))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'');
+const deb64u = s => Uint8Array.from(atob(s.replace(/-/g,'+').replace(/_/g,'/') + '==='.slice((s.length+3)%4)), c => c.charCodeAt(0));
+let enviando = false;
+async function enviar(){
+  if (falta().length || enviando) return;
+  if (!P.get('fid') || !P.get('k') || !P.get('tp')) { alert('Protótipo — abra pelo botão do bot.'); return; }
+  enviando = true;
+  if (tg && tg.MainButton) { tg.MainButton.setText('Enviando…'); tg.MainButton.showProgress(); }
   const dados = {fid: P.get('fid'), data: st.agora ? 'agora' : st.data, hora: st.agora ? null : String(st.h).padStart(2,'0')+':'+String(st.m).padStart(2,'0'),
                  aviso: avisoHoras(), texto: document.getElementById('msg').value.trim() || null};
-  if (tg && tg.sendData && tg.initData !== undefined && P.get('fid')) tg.sendData(JSON.stringify(dados));
-  else alert('Protótipo — seria enviado:\n' + JSON.stringify(dados, null, 1));
+  try {
+    const chave = await crypto.subtle.importKey('raw', deb64u(P.get('k')), 'AES-GCM', false, ['encrypt']);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const ct = await crypto.subtle.encrypt({name: 'AES-GCM', iv}, chave, new TextEncoder().encode(JSON.stringify(dados)));
+    const pacote = new Uint8Array(12 + ct.byteLength); pacote.set(iv); pacote.set(new Uint8Array(ct), 12);
+    const r = await fetch('https://ntfy.sh/' + P.get('tp'), {method: 'POST', body: P.get('fid') + '.' + b64u(pacote)});
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+    if (tg) tg.close(); else alert('Enviado!');
+  } catch (e) {
+    enviando = false;
+    if (tg && tg.MainButton) { tg.MainButton.hideProgress(); atualiza(); }
+    (tg && tg.showAlert ? tg.showAlert.bind(tg) : alert)('Não consegui enviar: ' + e.message + '. Tente de novo.');
+  }
 }
 if (tg && tg.MainButton) tg.MainButton.onClick(enviar);
 document.getElementById('fallback').onclick = enviar;
