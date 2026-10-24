@@ -59,6 +59,17 @@
   .grav small{color:var(--mut);text-align:center}
   .grav audio{width:100%}
   .linkbtn{border:0;background:none;color:var(--acc);font-size:15px;padding:4px}
+  #seq .item{background:var(--card);border-radius:14px;padding:10px;margin-bottom:8px}
+  #seq .topo{display:flex;align-items:center;gap:6px;margin-bottom:8px;color:var(--mut);font-size:13px;font-weight:600}
+  #seq .topo span{flex:1}
+  #seq .topo button{border:0;background:var(--bg);color:var(--fg);border-radius:8px;width:32px;height:28px;font-size:14px}
+  #seq img,#seq video{max-width:100%;max-height:220px;border-radius:10px;display:block;margin:0 auto 8px}
+  #seq audio{width:100%}
+  #seq input.leg{margin-top:2px}
+  .add{display:flex;flex-wrap:wrap;gap:8px;margin:4px 0 6px}
+  .add .chip{flex:1;text-align:center;white-space:nowrap}
+  .barra{height:4px;background:var(--line);border-radius:2px;overflow:hidden;margin-top:8px;display:none}
+  .barra div{height:100%;width:0;background:var(--acc);transition:width .2s}
   #fallback{position:fixed;left:14px;right:14px;bottom:14px;border:0;border-radius:12px;padding:15px;font-size:17px;font-weight:600;background:var(--acc);color:var(--accfg)}
 </style>
 </head>
@@ -102,17 +113,13 @@
     </div>
   </div>
 
-  <h2>✍️ Mensagem</h2>
-  <div class="card">
-    <div class="abas"><button class="chip sel" id="abaTxt">✍️ Texto</button><button class="chip" id="abaAud">🎙️ Áudio</button></div>
-    <div id="painelTxt"><textarea id="msg" placeholder="Digite a mensagem…"></textarea></div>
-    <div id="painelAud" class="grav" style="display:none">
-      <button class="rec" id="rec">🎙️</button>
-      <div class="tempo" id="tempo">0:00</div>
-      <small id="dica">Toque para gravar · toque de novo para parar</small>
-      <audio id="ouvir" controls style="display:none"></audio>
-      <button class="linkbtn" id="descartar" style="display:none">🗑️ Apagar e gravar de novo</button>
-    </div>
+  <h2>📨 Mensagens (na ordem de envio)</h2>
+  <div id="seq"></div>
+  <div class="add">
+    <button class="chip" id="addTxt">＋ ✍️ Texto</button>
+    <button class="chip" id="addAud">＋ 🎙️ Áudio</button>
+    <button class="chip" id="addMid">＋ 🖼️ Foto/Vídeo</button>
+    <input type="file" id="arq" accept="image/*,video/*" style="display:none">
   </div>
 
   <div class="resumo" id="resumo"></div>
@@ -123,7 +130,6 @@ const tg = window.Telegram && Telegram.WebApp; if (tg) { tg.ready(); tg.expand()
 const P = new URLSearchParams(location.search);
 const nome = P.get('n') || 'Contato'; document.getElementById('nome').textContent = nome;
 document.getElementById('ini').textContent = nome.replace(/[^A-Za-zÀ-ú0-9]/g,'').slice(0,1).toUpperCase() || '?';
-document.getElementById('msg').value = P.get('t') || '';
 const _n = new Date(Date.now() + 5*60000);           // hora atual arredondada p/ os próximos 5 min
 const st = {data: null /* hoje, logo abaixo */, agora: false, h: _n.getHours(), m: Math.ceil(_n.getMinutes()/5)*5 % 60, aviso: 0};
 if (_n.getMinutes() > 55) st.h = (st.h + 1) % 24;
@@ -172,38 +178,72 @@ document.querySelectorAll('#avisos .chip').forEach(b => b.onclick = () => {
   document.querySelectorAll('#avisos .chip').forEach(x => x.classList.remove('sel')); b.classList.add('sel');
   document.getElementById('custom').classList.toggle('on', b.dataset.h === 'x');
   st.aviso = b.dataset.h === 'x' ? 'x' : +b.dataset.h; vib(); atualiza(); });
-['qtd','un','msg'].forEach(id => document.getElementById(id).addEventListener('input', atualiza));
+['qtd','un'].forEach(id => document.getElementById(id).addEventListener('input', atualiza));
 
-// ---- áudio
-let modo = P.get('a') ? 'aud' : 'txt', audioBlob = null, rec = null, pedacos = [], t0 = 0, relogio = null;
-function aba(m){ modo = m; document.getElementById('abaTxt').classList.toggle('sel', m === 'txt'); document.getElementById('abaAud').classList.toggle('sel', m === 'aud');
-  document.getElementById('painelTxt').style.display = m === 'txt' ? '' : 'none'; document.getElementById('painelAud').style.display = m === 'aud' ? '' : 'none'; atualiza(); }
-document.getElementById('abaTxt').onclick = () => aba('txt');
-document.getElementById('abaAud').onclick = () => aba('aud');
-const fmt = s => Math.floor(s/60) + ':' + String(Math.floor(s%60)).padStart(2,'0');
-document.getElementById('rec').onclick = async () => {
-  const b = document.getElementById('rec');
-  if (rec && rec.state === 'recording') { rec.stop(); return; }
+// ---- sequência de mensagens
+const MAX = 15 * 1024 * 1024;
+const itens = [];   // {tipo:'texto'|'voz'|'midia', texto, blob, mime, legenda, chat}
+let gravando = null;
+function render(){
+  const box = document.getElementById('seq'); box.innerHTML = '';
+  itens.forEach((x, k) => {
+    const d = document.createElement('div'); d.className = 'item';
+    const nome = x.tipo === 'texto' ? '✍️ Texto' : x.tipo === 'voz' ? '🎙️ Áudio (mensagem de voz)' : (x.mime || '').startsWith('video') ? '🎬 Vídeo' : '🖼️ Foto';
+    d.innerHTML = '<div class="topo"><span>' + (k + 1) + '. ' + nome + '</span>' +
+      (k > 0 ? '<button data-a="up">↑</button>' : '') + (k < itens.length - 1 ? '<button data-a="down">↓</button>' : '') +
+      '<button data-a="del">🗑️</button></div>';
+    if (x.tipo === 'texto') {
+      const t = document.createElement('textarea'); t.placeholder = 'Digite a mensagem…'; t.value = x.texto || '';
+      t.oninput = () => { x.texto = t.value; atualiza(); }; d.appendChild(t);
+    } else if (x.tipo === 'voz') {
+      if (x.chat) d.insertAdjacentHTML('beforeend', '<small style="color:var(--mut)">Áudio enviado pelo chat (' + x.chat + ')</small>');
+      else if (x.blob) { const a = document.createElement('audio'); a.controls = true; a.src = URL.createObjectURL(x.blob); d.appendChild(a); }
+      else {
+        const g = document.createElement('div'); g.className = 'grav';
+        g.innerHTML = '<button class="rec">🎙️</button><div class="tempo">0:00</div><small>Toque para gravar · toque de novo para parar</small>';
+        g.querySelector('.rec').onclick = () => gravar(x, g); d.appendChild(g);
+      }
+    } else {
+      const url = URL.createObjectURL(x.blob);
+      d.insertAdjacentHTML('beforeend', (x.mime || '').startsWith('video') ? '<video src="' + url + '" controls playsinline></video>' : '<img src="' + url + '">');
+      const l = document.createElement('input'); l.className = 'leg'; l.placeholder = 'Legenda (opcional)'; l.value = x.legenda || '';
+      l.oninput = () => { x.legenda = l.value; }; d.appendChild(l);
+      d.insertAdjacentHTML('beforeend', '<small style="color:var(--mut)">' + (x.blob.size / 1048576).toFixed(1) + ' MB</small>');
+    }
+    d.querySelectorAll('.topo button').forEach(b => b.onclick = () => {
+      if (b.dataset.a === 'del') itens.splice(k, 1);
+      if (b.dataset.a === 'up') itens.splice(k - 1, 0, itens.splice(k, 1)[0]);
+      if (b.dataset.a === 'down') itens.splice(k + 1, 0, itens.splice(k, 1)[0]);
+      vib(); render(); });
+    box.appendChild(d);
+  });
+  atualiza();
+}
+async function gravar(x, g){
+  const b = g.querySelector('.rec');
+  if (gravando && gravando.rec.state === 'recording') { gravando.rec.stop(); return; }
   try {
     const stream = await navigator.mediaDevices.getUserMedia({audio: true});
     const tipo = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg'].find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
-    rec = new MediaRecorder(stream, tipo ? {mimeType: tipo} : {}); pedacos = [];
-    rec.ondataavailable = e => e.data.size && pedacos.push(e.data);
-    rec.onstop = () => { stream.getTracks().forEach(x => x.stop()); clearInterval(relogio); b.classList.remove('on'); b.textContent = '🎙️';
-      audioBlob = new Blob(pedacos, {type: rec.mimeType || tipo || 'audio/webm'});
-      const o = document.getElementById('ouvir'); o.src = URL.createObjectURL(audioBlob); o.style.display = '';
-      document.getElementById('descartar').style.display = ''; document.getElementById('dica').textContent = 'Ouça antes de agendar'; b.style.display = 'none'; atualiza(); };
-    rec.start(250); t0 = Date.now(); b.classList.add('on'); b.textContent = '⏹';
-    document.getElementById('dica').textContent = 'Gravando… toque para parar';
-    relogio = setInterval(() => document.getElementById('tempo').textContent = fmt((Date.now() - t0)/1000), 250);
-    vib();
+    const rec = new MediaRecorder(stream, tipo ? {mimeType: tipo} : {}); const ped = []; const t0 = Date.now();
+    const relogio = setInterval(() => { const e = (Date.now() - t0) / 1000; g.querySelector('.tempo').textContent = Math.floor(e / 60) + ':' + String(Math.floor(e % 60)).padStart(2, '0'); }, 250);
+    rec.ondataavailable = e => e.data.size && ped.push(e.data);
+    rec.onstop = () => { stream.getTracks().forEach(t => t.stop()); clearInterval(relogio); gravando = null;
+      x.blob = new Blob(ped, {type: rec.mimeType || tipo || 'audio/webm'}); x.mime = x.blob.type; render(); };
+    gravando = {rec}; rec.start(250); b.classList.add('on'); b.textContent = '⏹'; g.querySelector('small').textContent = 'Gravando… toque para parar'; vib();
   } catch (e) {
     (tg && tg.showAlert ? tg.showAlert.bind(tg) : alert)('Não consegui usar o microfone aqui (' + e.name + '). Grave o áudio no chat do bot.');
   }
-};
-document.getElementById('descartar').onclick = () => { audioBlob = null; const o = document.getElementById('ouvir'); o.removeAttribute('src'); o.style.display = 'none';
-  document.getElementById('descartar').style.display = 'none'; document.getElementById('rec').style.display = ''; document.getElementById('tempo').textContent = '0:00';
-  document.getElementById('dica').textContent = 'Toque para gravar · toque de novo para parar'; atualiza(); };
+}
+document.getElementById('addTxt').onclick = () => { itens.push({tipo: 'texto', texto: ''}); render();
+  const ts = document.querySelectorAll('#seq textarea'); ts.length && ts[ts.length - 1].focus(); };
+document.getElementById('addAud').onclick = () => { itens.push({tipo: 'voz'}); render(); };
+document.getElementById('addMid').onclick = () => document.getElementById('arq').click();
+document.getElementById('arq').onchange = e => {
+  const f = e.target.files[0]; e.target.value = '';
+  if (!f) return;
+  if (f.size > MAX) { (tg && tg.showAlert ? tg.showAlert.bind(tg) : alert)('Arquivo grande demais (' + (f.size / 1048576).toFixed(0) + ' MB). O limite é 15 MB.'); return; }
+  itens.push({tipo: 'midia', blob: f, mime: f.type || 'application/octet-stream'}); render(); };
 
 function avisoHoras(){
   if (st.aviso === 'x'){ const q = parseFloat(document.getElementById('qtd').value); return q > 0 ? Math.round(q * +document.getElementById('un').value * 100)/100 : null; }
@@ -213,8 +253,9 @@ function falta(){
   const f = [];
   if (!st.data) f.push('data');
   if (avisoHoras() === null) f.push('aviso');
-  if (modo === 'aud' && !audioBlob && !P.get('a')) f.push('gravar o áudio');
-  if (modo === 'txt' && !document.getElementById('msg').value.trim() && !P.get('a')) f.push('mensagem');
+  if (!itens.length) f.push('mensagem');
+  else if (itens.some(x => x.tipo === 'texto' && !(x.texto || '').trim())) f.push('texto vazio');
+  else if (itens.some(x => x.tipo === 'voz' && !x.blob && !x.chat)) f.push('gravar o áudio');
   if (!st.agora && st.data){ const q = new Date(st.data+'T'+String(st.h).padStart(2,'0')+':'+String(st.m).padStart(2,'0')); if (q < new Date()) f.push('horário já passou'); }
   return f;
 }
@@ -240,38 +281,49 @@ async function cifrar(bytes){
 // avisa o PC que o agendador foi aberto (o formulário não expira mais)
 if (P.get('fid') && P.get('k') && P.get('tp')) cifrar(new TextEncoder().encode(JSON.stringify({fid: P.get('fid'), evento: 'aberto'})))
   .then(p => fetch('https://ntfy.sh/' + P.get('tp'), {method: 'POST', body: P.get('fid') + '.' + b64u(p)})).catch(() => {});
+const mid = () => Math.random().toString(36).slice(2, 10);
+function progresso(txt){ if (tg && tg.MainButton) tg.MainButton.setText(txt); else document.getElementById('fallback').textContent = txt; }
 async function enviar(){
   if (falta().length || enviando) return;
   if (!P.get('fid') || !P.get('k') || !P.get('tp')) { alert('Protótipo — abra pelo botão do bot.'); return; }
   enviando = true;
-  if (tg && tg.MainButton) { tg.MainButton.setText('Enviando…'); tg.MainButton.showProgress(); }
-  const comAudio = modo === 'aud' && audioBlob;
-  const dados = {fid: P.get('fid'), data: st.agora ? 'agora' : st.data, hora: st.agora ? null : String(st.h).padStart(2,'0')+':'+String(st.m).padStart(2,'0'),
-                 aviso: avisoHoras(), texto: modo === 'txt' ? (document.getElementById('msg').value.trim() || null) : null,
-                 audio: !!comAudio, mime: comAudio ? audioBlob.type : null};
+  if (tg && tg.MainButton) tg.MainButton.showProgress();
+  const url = 'https://ntfy.sh/' + P.get('tp'), fid = P.get('fid');
   try {
-    const pacote = await cifrar(new TextEncoder().encode(JSON.stringify(dados)));
-    let r;
-    if (comAudio) {
-      const arq = await cifrar(new Uint8Array(await audioBlob.arrayBuffer()));
-      r = await fetch('https://ntfy.sh/' + P.get('tp'), {method: 'PUT', body: arq,
-            headers: {'Filename': 'a.bin', 'X-Message': P.get('fid') + '.' + b64u(pacote)}});
-    } else {
-      r = await fetch('https://ntfy.sh/' + P.get('tp'), {method: 'POST', body: P.get('fid') + '.' + b64u(pacote)});
+    const comAnexo = itens.filter(x => x.blob);
+    let n = 0;
+    for (const x of comAnexo) {
+      n++; progresso('Enviando anexo ' + n + ' de ' + comAnexo.length + '…');
+      x.mid = mid();
+      const meta = await cifrar(new TextEncoder().encode(JSON.stringify({fid, evento: 'midia', mid: x.mid, mime: x.mime})));
+      const corpo = await cifrar(new Uint8Array(await x.blob.arrayBuffer()));
+      const r = await fetch(url, {method: 'PUT', body: corpo, headers: {'Filename': 'a.bin', 'X-Message': fid + '.' + b64u(meta)}});
+      if (!r.ok) throw new Error('anexo ' + n + ': HTTP ' + r.status + (r.status === 413 ? ' (arquivo grande demais)' : ''));
     }
+    progresso('Agendando…');
+    const seq = itens.map(x => x.tipo === 'texto' ? {tipo: 'texto', texto: x.texto.trim()}
+                         : x.chat ? {tipo: 'voz', chat: true} : {tipo: x.tipo, mid: x.mid, legenda: x.legenda || null});
+    const dados = {fid, data: st.agora ? 'agora' : st.data, hora: st.agora ? null : String(st.h).padStart(2,'0')+':'+String(st.m).padStart(2,'0'),
+                   aviso: avisoHoras(), itens: seq};
+    const pacote = await cifrar(new TextEncoder().encode(JSON.stringify(dados)));
+    const r = await fetch(url, {method: 'POST', body: fid + '.' + b64u(pacote)});
     if (!r.ok) throw new Error('HTTP ' + r.status);
     if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
     if (tg) tg.close(); else alert('Enviado!');
   } catch (e) {
     enviando = false;
-    if (tg && tg.MainButton) { tg.MainButton.hideProgress(); atualiza(); }
+    if (tg && tg.MainButton) tg.MainButton.hideProgress();
+    atualiza();
     (tg && tg.showAlert ? tg.showAlert.bind(tg) : alert)('Não consegui enviar: ' + e.message + '. Tente de novo.');
   }
 }
+
 if (tg && tg.MainButton) tg.MainButton.onClick(enviar);
 document.getElementById('fallback').onclick = enviar;
-if (P.get('a')) { document.getElementById('abaAud').textContent = '🎙️ Áudio (' + P.get('a') + ')'; aba('aud'); document.getElementById('dica').textContent = 'Áudio já enviado pelo chat — ou grave outro'; }
-calendario(); atualiza();
+if (P.get('t')) itens.push({tipo: 'texto', texto: P.get('t')});
+if (P.get('a')) itens.push({tipo: 'voz', chat: P.get('a')});
+if (!itens.length) itens.push({tipo: 'texto', texto: ''});
+calendario(); render();
 </script>
 </body>
 </html>
