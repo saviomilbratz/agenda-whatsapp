@@ -181,7 +181,9 @@ document.querySelectorAll('#avisos .chip').forEach(b => b.onclick = () => {
 ['qtd','un'].forEach(id => document.getElementById(id).addEventListener('input', atualiza));
 
 // ---- sequência de mensagens
-const MAX = 15 * 1024 * 1024;
+const MAX = 15 * 1024 * 1024;        // por arquivo
+const MAX_TOTAL = 18 * 1024 * 1024;  // soma dos anexos (ntfy anônimo: 20 MB por IP a cada 3 h)
+const PARTE = 2000000;                // ntfy anônimo aceita até 2 MB por anexo -> divide em pedaços
 const itens = [];   // {tipo:'texto'|'voz'|'midia', texto, blob, mime, legenda, chat}
 let gravando = null;
 function render(){
@@ -225,7 +227,7 @@ async function gravar(x, g){
   try {
     const stream = await navigator.mediaDevices.getUserMedia({audio: true});
     const tipo = ['audio/mp4', 'audio/webm;codecs=opus', 'audio/webm', 'audio/ogg'].find(t => window.MediaRecorder && MediaRecorder.isTypeSupported(t)) || '';
-    const rec = new MediaRecorder(stream, tipo ? {mimeType: tipo} : {}); const ped = []; const t0 = Date.now();
+    const rec = new MediaRecorder(stream, Object.assign({audioBitsPerSecond: 64000}, tipo ? {mimeType: tipo} : {})); const ped = []; const t0 = Date.now();
     const relogio = setInterval(() => { const e = (Date.now() - t0) / 1000; g.querySelector('.tempo').textContent = Math.floor(e / 60) + ':' + String(Math.floor(e % 60)).padStart(2, '0'); }, 250);
     rec.ondataavailable = e => e.data.size && ped.push(e.data);
     rec.onstop = () => { stream.getTracks().forEach(t => t.stop()); clearInterval(relogio); gravando = null;
@@ -292,13 +294,27 @@ async function enviar(){
   try {
     const comAnexo = itens.filter(x => x.blob);
     let n = 0;
+    const total = comAnexo.reduce((s, x) => s + x.blob.size, 0);
+    if (total > MAX_TOTAL) throw new Error('anexos somam ' + (total / 1048576).toFixed(1) + ' MB; o limite é ' + (MAX_TOTAL / 1048576).toFixed(0) + ' MB');
     for (const x of comAnexo) {
-      n++; progresso('Enviando anexo ' + n + ' de ' + comAnexo.length + '…');
+      n++;
       x.mid = mid();
-      const meta = await cifrar(new TextEncoder().encode(JSON.stringify({fid, evento: 'midia', mid: x.mid, mime: x.mime})));
-      const corpo = await cifrar(new Uint8Array(await x.blob.arrayBuffer()));
-      const r = await fetch(url, {method: 'PUT', body: corpo, headers: {'Filename': 'a.bin', 'X-Message': fid + '.' + b64u(meta)}});
-      if (!r.ok) throw new Error('anexo ' + n + ': HTTP ' + r.status + (r.status === 413 ? ' (arquivo grande demais)' : ''));
+      const bytes = new Uint8Array(await x.blob.arrayBuffer());
+      const partes = Math.max(1, Math.ceil(bytes.length / PARTE));
+      for (let i = 0; i < partes; i++) {
+        progresso('Enviando anexo ' + n + ' de ' + comAnexo.length + (partes > 1 ? ' (' + (i + 1) + '/' + partes + ')' : '') + '…');
+        const info = {fid, evento: 'midia', mid: x.mid, mime: x.mime};
+        if (partes > 1) { info.parte = i; info.partes = partes; }
+        const meta = await cifrar(new TextEncoder().encode(JSON.stringify(info)));
+        const corpo = await cifrar(bytes.subarray(i * PARTE, (i + 1) * PARTE));
+        let r, tent = 0;
+        while (true) {
+          try { r = await fetch(url, {method: 'PUT', body: corpo, headers: {'Filename': 'a.bin', 'X-Message': fid + '.' + b64u(meta)}}); } catch (e) { r = null; }
+          if ((r && r.ok) || ++tent >= 3 || (r && r.status === 413)) break;
+          await new Promise(ok => setTimeout(ok, 1500 * tent));
+        }
+        if (!r || !r.ok) throw new Error('anexo ' + n + (partes > 1 ? ' parte ' + (i + 1) : '') + ': ' + (r ? 'HTTP ' + r.status : 'sem conexão') + (r && r.status === 413 ? ' (limite do servidor)' : ''));
+      }
     }
     progresso('Agendando…');
     const seq = itens.map(x => x.tipo === 'texto' ? {tipo: 'texto', texto: x.texto.trim()}
