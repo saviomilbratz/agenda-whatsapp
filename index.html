@@ -70,6 +70,9 @@
   .add .chip{flex:1;text-align:center;white-space:nowrap}
   .barra{height:4px;background:var(--line);border-radius:2px;overflow:hidden;margin-top:8px;display:none}
   .barra div{height:100%;width:0;background:var(--acc);transition:width .2s}
+  .cond{display:flex;gap:12px;align-items:flex-start;cursor:pointer}
+  .cond input{width:24px;height:24px;flex:none;margin:2px 0 0;accent-color:var(--acc)}
+  .cond b{font-weight:600}.cond small{display:block;color:var(--mut);font-size:13px;margin-top:3px}
   #fallback{position:fixed;left:14px;right:14px;bottom:14px;border:0;border-radius:12px;padding:15px;font-size:17px;font-weight:600;background:var(--acc);color:var(--accfg)}
 </style>
 </head>
@@ -99,6 +102,12 @@
     </div>
   </div>
 
+  <div id="blocoCond">
+    <h2>🔀 Condição</h2>
+    <label class="card cond"><input type="checkbox" id="cond">
+      <span><b>Enviar só se eu NÃO receber mensagem</b><small>Se o contato te mandar qualquer mensagem entre agora e o horário agendado, esta NÃO será enviada (você recebe um aviso).</small></span>
+    </label>
+  </div>
   <h2>⏰ Avisar se não responder</h2>
   <div class="card">
     <div class="chips" id="avisos">
@@ -179,6 +188,8 @@ document.querySelectorAll('#avisos .chip').forEach(b => b.onclick = () => {
   document.getElementById('custom').classList.toggle('on', b.dataset.h === 'x');
   st.aviso = b.dataset.h === 'x' ? 'x' : +b.dataset.h; vib(); atualiza(); });
 ['qtd','un'].forEach(id => document.getElementById(id).addEventListener('input', atualiza));
+document.getElementById('cond').addEventListener('change', () => { vib(); atualiza(); });
+const condicional = () => !st.agora && document.getElementById('cond').checked;
 
 // ---- sequência de mensagens
 const MAX = 15 * 1024 * 1024;        // por arquivo
@@ -263,10 +274,11 @@ function falta(){
 }
 function atualiza(){
   document.getElementById('blocoHora').style.display = st.agora ? 'none' : '';
+  document.getElementById('blocoCond').style.display = st.agora ? 'none' : '';
   const f = falta(), a = avisoHoras();
   const quando = st.agora ? 'agora' : st.data ? new Date(st.data+'T12:00').toLocaleDateString('pt-BR',{weekday:'short',day:'2-digit',month:'2-digit'}) + ' às ' + String(st.h).padStart(2,'0')+':'+String(st.m).padStart(2,'0') : '—';
   const av = a === null ? '—' : a === 0 ? 'não avisar' : (a >= 24 && a % 24 === 0 ? (a/24)+' dia(s)' : a+'h');
-  document.getElementById('resumo').textContent = '📅 ' + quando + '   ·   ⏰ ' + av + (f.length ? '   ·   falta: ' + f.join(', ') : '');
+  document.getElementById('resumo').textContent = '📅 ' + quando + '   ·   ⏰ ' + av + (condicional() ? '   ·   🔀 só se não receber msg' : '') + (f.length ? '   ·   falta: ' + f.join(', ') : '');
   const ok = !f.length;
   if (tg && tg.MainButton){ tg.MainButton.setText(ok ? '✅ Agendar' : 'Falta: ' + f.join(', ')); ok ? tg.MainButton.enable() : tg.MainButton.disable(); tg.MainButton.show(); document.getElementById('fallback').style.display='none'; }
   document.getElementById('fallback').disabled = !ok; document.getElementById('fallback').style.opacity = ok ? 1 : .5;
@@ -320,7 +332,7 @@ async function enviar(){
     const seq = itens.map(x => x.tipo === 'texto' ? {tipo: 'texto', texto: x.texto.trim()}
                          : x.chat ? {tipo: 'voz', chat: true} : {tipo: x.tipo, mid: x.mid, legenda: x.legenda || null});
     const dados = {fid, data: st.agora ? 'agora' : st.data, hora: st.agora ? null : String(st.h).padStart(2,'0')+':'+String(st.m).padStart(2,'0'),
-                   aviso: avisoHoras(), itens: seq};
+                   aviso: avisoHoras(), so_sem_msg: condicional(), itens: seq};
     const pacote = await cifrar(new TextEncoder().encode(JSON.stringify(dados)));
     const r = await fetch(url, {method: 'POST', body: fid + '.' + b64u(pacote)});
     if (!r.ok) throw new Error('HTTP ' + r.status);
